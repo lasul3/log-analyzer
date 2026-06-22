@@ -1153,6 +1153,35 @@ const APP = {
 
 const STORE_CONTENT = 'la.content';
 const STORE_FILENAME = 'la.filename';
+const STORE_USE_IDB = 'la.useIdb';
+
+/* IndexedDB load — counterpart to upload.js for oversized payloads. */
+function idbLoad() {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open('logAnalyzer', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('kv');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('kv', 'readonly');
+      const req = tx.objectStore('kv').get('payload');
+      req.onsuccess = () => { db.close(); resolve(req.result || null); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    };
+  });
+}
+
+/** Resolve the stored payload from sessionStorage, or IndexedDB if oversized. */
+async function loadPayload() {
+  if (sessionStorage.getItem(STORE_USE_IDB) === '1') {
+    const p = await idbLoad();
+    if (p && p.content) return { content: p.content, filename: p.filename || 'analysis.log' };
+    return null;
+  }
+  const content = sessionStorage.getItem(STORE_CONTENT);
+  if (!content) return null;
+  return { content, filename: sessionStorage.getItem(STORE_FILENAME) || 'analysis.log' };
+}
 
 /** Run the full analysis pipeline over raw log content into APP state. */
 function runAnalysis(content, filename) {
@@ -1232,13 +1261,12 @@ const UI = {
 };
 
 /** Boot the dashboard: load stored logs, analyze, render, wire events. */
-function boot() {
-  const content = sessionStorage.getItem(STORE_CONTENT);
-  if (!content) { location.replace('index.html'); return; }
-  const filename = sessionStorage.getItem(STORE_FILENAME) || 'analysis.log';
+async function boot() {
+  const payload = await loadPayload();
+  if (!payload) { location.replace('index.html'); return; }
 
   try {
-    runAnalysis(content, filename);
+    runAnalysis(payload.content, payload.filename);
     renderAll();
   } catch (err) {
     console.error(err);
@@ -1255,6 +1283,8 @@ function boot() {
   $('btn-new').addEventListener('click', () => {
     sessionStorage.removeItem(STORE_CONTENT);
     sessionStorage.removeItem(STORE_FILENAME);
+    sessionStorage.removeItem(STORE_USE_IDB);
+    indexedDB.deleteDatabase('logAnalyzer');
     location.href = 'index.html';
   });
 

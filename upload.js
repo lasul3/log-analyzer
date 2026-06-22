@@ -11,6 +11,24 @@ const $ = (id) => document.getElementById(id);
 
 const STORE_CONTENT = 'la.content';
 const STORE_FILENAME = 'la.filename';
+const STORE_USE_IDB = 'la.useIdb';
+
+/* IndexedDB fallback — sessionStorage caps at ~5MB, which large GCP
+   Cloud Logging JSON exports easily exceed. */
+function idbStore(content, filename) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open('logAnalyzer', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('kv');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put({ content, filename }, 'payload');
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  });
+}
 
 /* Sample GCP Cloud Logging export (Java / Cloud Run) demonstrating
    trace correlation, entities, config flags, a null response, a slow gap,
@@ -42,10 +60,28 @@ function readFile(file) {
   reader.readAsText(file);
 }
 
-function analyze() {
+async function analyze() {
   if (!payload) return;
-  sessionStorage.setItem(STORE_CONTENT, payload.content);
-  sessionStorage.setItem(STORE_FILENAME, payload.filename);
+  const btn = $('analyze-btn');
+  try {
+    sessionStorage.setItem(STORE_CONTENT, payload.content);
+    sessionStorage.setItem(STORE_FILENAME, payload.filename);
+    sessionStorage.removeItem(STORE_USE_IDB);
+  } catch {
+    // Payload too large for sessionStorage — fall back to IndexedDB.
+    try {
+      btn.disabled = true;
+      sessionStorage.removeItem(STORE_CONTENT);
+      sessionStorage.setItem(STORE_FILENAME, payload.filename);
+      await idbStore(payload.content, payload.filename);
+      sessionStorage.setItem(STORE_USE_IDB, '1');
+    } catch (e2) {
+      console.error(e2);
+      alert('This log file is too large to analyze in the browser.');
+      btn.disabled = false;
+      return;
+    }
+  }
   location.href = 'dashboard.html';
 }
 
