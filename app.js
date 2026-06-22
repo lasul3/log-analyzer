@@ -1151,128 +1151,116 @@ const APP = {
   filename: '', format: '', showAll: false, search: '', chart: null,
 };
 
-function analyze(content, filename) {
-  try {
-    const { entries, format } = parseLogs(content);
-    if (!entries.length) { alert('No log entries found in the input.'); return; }
+const STORE_CONTENT = 'la.content';
+const STORE_FILENAME = 'la.filename';
 
-    APP.entries  = entries;
-    APP.format   = format;
-    APP.filename = filename;
-    APP.stats    = computeStats(entries);
-    APP.severity = computeSeverity(entries);
-    APP.issues   = analyzeIssues(entries);
-    APP.entities = extractEntities(entries);
-    APP.traceGroups = groupByTrace(entries);
-    APP.timeline = buildTimeline(entries);
-    APP.timing   = buildTiming(entries);
-    APP.configs  = extractConfigs(entries);
-    APP.anomalies = findAnomalies(entries, APP.stats, APP.timing, APP.entities, APP.traceGroups);
-    APP.nextSteps = buildNextSteps(APP.entities, APP.issues, APP.timing);
+/** Run the full analysis pipeline over raw log content into APP state. */
+function runAnalysis(content, filename) {
+  const { entries, format } = parseLogs(content);
+  APP.entries  = entries;
+  APP.format   = format;
+  APP.filename = filename || 'analysis.log';
+  APP.showAll  = false;
+  APP.search   = '';
 
-    $('source-name').textContent = filename;
-    const notes = [
-      `${entries.length.toLocaleString()} entries`,
-      `Format: ${format}`,
-      `${plural(APP.issues.length, 'issue')}`,
-      APP.traceGroups.size ? `${plural(APP.traceGroups.size, 'trace')}` : null,
-      APP.timing.slowCount ? `${plural(APP.timing.slowCount, 'slow gap')}` : null,
-    ].filter(Boolean);
-    $('source-meta').textContent = notes.join(' · ');
-
-    renderCards(APP.stats);
-    renderOverview();
-    renderTimeline();
-    renderTrace();
-    renderDebug();
-    renderLogs();
-
-    $('view-upload').hidden = true;
-    $('view-dashboard').hidden = false;
-    switchTab('overview');
-  } catch (err) {
-    console.error(err);
-    alert(`Parse error: ${err.message}\nSee console for details.`);
-  }
+  APP.stats       = computeStats(entries);
+  APP.severity    = computeSeverity(entries);
+  APP.issues      = analyzeIssues(entries);
+  APP.entities    = extractEntities(entries);
+  APP.traceGroups = groupByTrace(entries);
+  APP.timeline    = buildTimeline(entries);
+  APP.timing      = buildTiming(entries);
+  APP.configs     = extractConfigs(entries);
+  APP.anomalies   = findAnomalies(entries, APP.stats, APP.timing, APP.entities, APP.traceGroups);
+  APP.nextSteps   = buildNextSteps(APP.entities, APP.issues, APP.timing);
 }
 
+const FORMAT_LABELS = {
+  'gcp-array': 'GCP JSON array', 'gcp-ndjson': 'GCP NDJSON',
+  'json-array': 'JSON array', 'ndjson': 'NDJSON', 'plaintext': 'Plain text',
+};
+
+/** Render every part of the dashboard from current APP state. */
+function renderAll() {
+  $('source-name').textContent = APP.filename;
+  const issueWord = APP.issues.length === 1 ? 'issue group' : 'issue groups';
+  $('source-meta').textContent =
+    `${FORMAT_LABELS[APP.format] || APP.format} · ${APP.stats.total.toLocaleString()} lines · ${APP.issues.length} ${issueWord}`;
+
+  renderCards(APP.stats);
+  renderOverview();
+  renderTimeline();
+  renderTrace();
+  renderDebug();
+  renderLogs();
+}
+
+/** Show one dashboard tab and its panel. */
 function switchTab(name) {
-  els('.tab').forEach(b => b.classList.toggle('is-active', b.dataset.tab === name));
-  els('.panel').forEach(p => { p.hidden = true; p.classList.remove('is-active'); });
-  const panel = $(`panel-${name}`);
-  panel.hidden = false; panel.classList.add('is-active');
+  els('.tab').forEach(t => t.classList.toggle('is-active', t.dataset.tab === name));
+  els('.panel').forEach(p => {
+    const on = p.id === `panel-${name}`;
+    p.classList.toggle('is-active', on);
+    p.hidden = !on;
+  });
+  if (name === 'timeline') APP.chart?.resize();
 }
 
-/* Inline-handler namespace (used by generated markup) */
+/** Toggle the Flagged / All segment in the Log Viewer. */
+function setSeg(showAll) {
+  APP.showAll = showAll;
+  $('seg-all').classList.toggle('is-active', showAll);
+  $('seg-flagged').classList.toggle('is-active', !showAll);
+  renderLogs();
+}
+
+/* Collapsible handlers referenced from inline onclick in renderers. */
 const UI = {
+  toggleTrace(idx) {
+    const body = $(`tg-body-${idx}`), arr = $(`tg-arr-${idx}`);
+    if (!body) return;
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? '' : 'none';
+    if (arr) arr.textContent = hidden ? '▼' : '▶';
+  },
   toggleStack(id) {
     const pre = $(`st-${id}`), arr = $(`st-arr-${id}`);
-    pre.hidden = !pre.hidden; arr.textContent = pre.hidden ? '▶' : '▼';
-  },
-  toggleTrace(id) {
-    const body = $(`tg-body-${id}`), arr = $(`tg-arr-${id}`);
-    body.hidden = !body.hidden; arr.textContent = body.hidden ? '▶' : '▼';
+    if (!pre) return;
+    pre.hidden = !pre.hidden;
+    if (arr) arr.textContent = pre.hidden ? '▶' : '▼';
   },
 };
 
-const SAMPLE = [
-  { timestamp: '2026-06-18T10:15:01.120Z', severity: 'INFO', trace: 'projects/demo-prod/traces/abc123def456abc123def456abc12300', resource: { type: 'cloud_run_revision', labels: { service_name: 'order-service', revision_name: 'order-service-00042-xyz', project_id: 'demo-prod', location: 'us-central1' } }, labels: { 'run.googleapis.com/request_id': 'req-7f3a91' }, jsonPayload: { message: 'Received POST /api/orders request', thread: 'http-nio-8080-exec-3', logger: 'com.demo.order.OrderController', daId: 'DA-55012' } },
-  { timestamp: '2026-06-18T10:15:01.140Z', severity: 'DEBUG', trace: 'projects/demo-prod/traces/abc123def456abc123def456abc12300', resource: { type: 'cloud_run_revision', labels: { service_name: 'order-service', revision_name: 'order-service-00042-xyz', project_id: 'demo-prod', location: 'us-central1' } }, jsonPayload: { message: 'Loaded config: MAX_RETRIES=3, TIMEOUT_MS=5000, featureFlagAsyncEnabled=true', thread: 'http-nio-8080-exec-3', logger: 'com.demo.order.OrderService' } },
-  { timestamp: '2026-06-18T10:15:01.160Z', severity: 'INFO', trace: 'projects/demo-prod/traces/abc123def456abc123def456abc12300', resource: { type: 'cloud_run_revision', labels: { service_name: 'order-service', revision_name: 'order-service-00042-xyz', project_id: 'demo-prod', location: 'us-central1' } }, jsonPayload: { message: 'Calling external inventory-service API at https://inventory/api/check', thread: 'http-nio-8080-exec-3', logger: 'com.demo.order.InventoryClient' } },
-  { timestamp: '2026-06-18T10:15:13.880Z', severity: 'WARN', trace: 'projects/demo-prod/traces/abc123def456abc123def456abc12300', resource: { type: 'cloud_run_revision', labels: { service_name: 'order-service', revision_name: 'order-service-00042-xyz', project_id: 'demo-prod', location: 'us-central1' } }, jsonPayload: { message: 'Response from inventory-service was null after 12s', thread: 'http-nio-8080-exec-3', logger: 'com.demo.order.InventoryClient' } },
-  { timestamp: '2026-06-18T10:15:13.900Z', severity: 'ERROR', trace: 'projects/demo-prod/traces/abc123def456abc123def456abc12300', resource: { type: 'cloud_run_revision', labels: { service_name: 'order-service', revision_name: 'order-service-00042-xyz', project_id: 'demo-prod', location: 'us-central1' } }, jsonPayload: { message: 'Failed to process order', thread: 'http-nio-8080-exec-3', logger: 'com.demo.order.OrderService', stack_trace: 'java.lang.NullPointerException: Cannot invoke "InventoryResponse.getStock()" because "response" is null\n    at com.demo.order.OrderService.process(OrderService.java:88)\n    at com.demo.order.OrderController.create(OrderController.java:45)' } },
-];
+/** Boot the dashboard: load stored logs, analyze, render, wire events. */
+function boot() {
+  const content = sessionStorage.getItem(STORE_CONTENT);
+  if (!content) { location.replace('index.html'); return; }
+  const filename = sessionStorage.getItem(STORE_FILENAME) || 'analysis.log';
 
-document.addEventListener('DOMContentLoaded', () => {
-  const dz = $('dropzone'), fileInput = $('file-input'), paste = $('paste-input'), analyzeBtn = $('analyze-btn');
-  let pending = { content: '', filename: '' };
-
-  const setBtnLabel = (txt) => { analyzeBtn.lastChild.textContent = ' ' + txt; };
-
-  function loadFile(file) {
-    const r = new FileReader();
-    r.onload = ev => {
-      pending = { content: ev.target.result, filename: file.name };
-      const prev = ev.target.result.slice(0, 800);
-      paste.value = ev.target.result.length > 800 ? prev + '\n…' : prev;
-      analyzeBtn.disabled = false; setBtnLabel(`Analyze ${file.name}`);
-    };
-    r.readAsText(file);
+  try {
+    runAnalysis(content, filename);
+    renderAll();
+  } catch (err) {
+    console.error(err);
+    alert(`Could not analyze logs: ${err.message}\nSee console for details.`);
+    location.replace('index.html');
+    return;
   }
 
-  fileInput.addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
-  paste.addEventListener('input', () => {
-    const v = paste.value.trim();
-    pending = { content: v, filename: 'pasted-logs.log' };
-    analyzeBtn.disabled = !v;
-    if (v) setBtnLabel('Analyze Pasted Logs');
-  });
-
-  ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('is-dragover'); }));
-  ['dragleave', 'dragend'].forEach(ev => dz.addEventListener(ev, () => dz.classList.remove('is-dragover')));
-  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('is-dragover'); e.dataTransfer.files[0] && loadFile(e.dataTransfer.files[0]); });
-
-  $('sample-btn').addEventListener('click', () => analyze(JSON.stringify(SAMPLE, null, 0), 'sample-cloud-run.json'));
-  analyzeBtn.addEventListener('click', () => pending.content && analyze(pending.content, pending.filename));
-
   els('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
-
-  $('seg-flagged').addEventListener('click', () => { APP.showAll = false; $('seg-flagged').classList.add('is-active'); $('seg-all').classList.remove('is-active'); renderLogs(); });
-  $('seg-all').addEventListener('click', () => { APP.showAll = true; $('seg-all').classList.add('is-active'); $('seg-flagged').classList.remove('is-active'); renderLogs(); });
-
-  let searchTimer;
-  $('log-search').addEventListener('input', e => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { APP.search = e.target.value.trim(); renderLogs(); }, 220); });
 
   $('btn-copy').addEventListener('click', copySummary);
   $('btn-html').addEventListener('click', exportHTML);
   $('btn-pdf').addEventListener('click', () => window.print());
-
   $('btn-new').addEventListener('click', () => {
-    $('view-dashboard').hidden = true; $('view-upload').hidden = false;
-    fileInput.value = ''; paste.value = ''; analyzeBtn.disabled = true; setBtnLabel('Analyze Logs');
-    APP.chart?.destroy(); APP.chart = null;
-    Object.assign(APP, { entries: [], issues: [], showAll: false, search: '', traceGroups: new Map() });
-    $('log-search').value = '';
-    $('seg-flagged').classList.add('is-active'); $('seg-all').classList.remove('is-active');
+    sessionStorage.removeItem(STORE_CONTENT);
+    sessionStorage.removeItem(STORE_FILENAME);
+    location.href = 'index.html';
   });
-});
+
+  $('log-search').addEventListener('input', (e) => { APP.search = e.target.value.trim(); renderLogs(); });
+  $('seg-flagged').addEventListener('click', () => setSeg(false));
+  $('seg-all').addEventListener('click', () => setSeg(true));
+}
+
+document.addEventListener('DOMContentLoaded', boot);
