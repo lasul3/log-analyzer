@@ -165,6 +165,94 @@ function fixesFor(type, exType) {
 }
 
 
+/* ── Plain-language descriptions for clickable highlighted tokens. ── */
+
+const EXCEPTION_DESC = {
+  NullPointerException: 'Code tried to use an object reference that was null — for example calling a method or reading a field on a variable that held no value.',
+  ConnectException: 'A TCP connection to a remote host/port could not be established. The target may be down, unreachable, or blocked by network rules.',
+  UnknownHostException: 'The hostname could not be resolved to an IP address — usually a DNS or configuration problem.',
+  SocketTimeoutException: 'A socket operation (connect or read) exceeded its time limit. The connection opened but no response arrived in time.',
+  TimeoutException: 'An operation did not complete within its allotted time window.',
+  HttpClientErrorException: 'An outbound HTTP call returned a 4xx client-error status — the request was rejected by the server.',
+  HttpServerErrorException: 'An outbound HTTP call returned a 5xx server-error status — the downstream service failed.',
+  ResourceAccessException: 'Spring could not reach the remote resource; this typically wraps an underlying I/O, timeout, or TLS error.',
+  JsonParseException: 'The JSON payload was malformed and could not be parsed.',
+  JsonMappingException: 'Valid JSON could not be mapped onto the target Java type — usually a schema mismatch.',
+  ClassCastException: 'An object was cast to a type it is not an instance of.',
+  IllegalArgumentException: 'A method received an argument that is invalid, out of range, or otherwise unacceptable.',
+  IllegalStateException: 'An operation was invoked while the object or application was in an inappropriate state.',
+  DataAccessException: 'Spring’s data-access layer reported a database failure.',
+  SQLException: 'The database driver reported an error — inspect the SQLState and vendor error code.',
+};
+
+const SEVERITY_INFO = {
+  ERROR: {
+    icon: '🔴', accent: 'red', kicker: 'Log severity',
+    desc: 'ERROR means an operation failed and the application could not complete the requested work. These entries usually need investigation and often carry a stack trace.',
+    steps: [
+      'Find the matching stack trace or cause in the same thread / trace ID.',
+      'Inspect the entries immediately before this one for the triggering action.',
+      'Check the Debug Guide to see how often this error recurs.',
+    ],
+    tip: 'Switch the Log Viewer to “Flagged” to isolate every ERROR-level line.',
+  },
+  FATAL: {
+    icon: '🔴', accent: 'red', kicker: 'Log severity',
+    desc: 'FATAL / SEVERE / CRITICAL marks a critical failure that may crash the process or leave the service unusable. Treat it as the highest priority.',
+    steps: [
+      'Determine whether the process or request was aborted.',
+      'Correlate with deployment, scaling, or resource-exhaustion events.',
+      'Escalate immediately if the service became unavailable.',
+    ],
+    tip: 'Cross-check the Timeline tab for a spike of failures around this moment.',
+  },
+  WARN: {
+    icon: '⚠️', accent: 'yellow', kicker: 'Log severity',
+    desc: 'WARN flags a recoverable or potentially harmful condition that did not stop execution but frequently precedes an error.',
+    steps: [
+      'Check whether warnings cluster just before an ERROR.',
+      'Confirm the warned-about resource or value is within expected limits.',
+      'Decide if the condition needs a config change or can be safely ignored.',
+    ],
+    tip: 'Repeated identical warnings often point to a misconfiguration worth fixing.',
+  },
+};
+
+/** Build the detail payload shown when a highlighted token is clicked. */
+function tokenDetail(type, value) {
+  if (type === 'ex') {
+    let key = null;
+    for (const k of Object.keys(EXCEPTION_DESC)) {
+      if (value === k || value.includes(k) || k.includes(value)) { key = k; break; }
+    }
+    const desc = key ? EXCEPTION_DESC[key]
+      : /Error$/.test(value)
+        ? `${value} is a Java error type. Errors usually signal serious problems an application is not expected to recover from.`
+        : `${value} is a Java exception signalling an abnormal condition encountered during execution.`;
+    return {
+      icon: '⚡', accent: 'orange', kicker: 'Java Exception',
+      title: value, desc,
+      steps: fixesFor('EXCEPTION', value),
+      tip: `Open the Debug Guide tab for the ranked, occurrence-aware breakdown of ${value}.`,
+    };
+  }
+  if (type === 'null') {
+    return {
+      icon: '🟣', accent: 'purple', kicker: 'Null value',
+      title: 'null',
+      desc: 'A null appears in this entry. In logs this usually means an external system returned an empty/absent response, or a variable was unexpectedly unset before use — a common precursor to NullPointerException.',
+      steps: NULL_RESPONSE_FIXES,
+      tip: 'Correlate by trace ID to see what the upstream call returned just before this null.',
+    };
+  }
+  const v = String(value).toUpperCase();
+  const info = (v === 'WARN' || v === 'WARNING') ? SEVERITY_INFO.WARN
+    : (v === 'FATAL' || v === 'SEVERE' || v === 'CRITICAL') ? SEVERITY_INFO.FATAL
+    : SEVERITY_INFO.ERROR;
+  return { ...info, title: value };
+}
+
+
 /* ═══════════════════ 3. PARSER ═══════════════════ */
 
 const RX = {
@@ -756,10 +844,10 @@ function buildNarrative(entities, stats, issues, traceGroups, timing) {
 
 function highlight(raw, query) {
   let t = esc(raw);
-  t = t.replace(/\b([A-Za-z_$][\w$]*(?:Exception|Error|Throwable))\b/g, '<span class="hl-ex">$1</span>');
-  t = t.replace(/\bnull\b/gi, '<span class="hl-null">$&</span>');
-  t = t.replace(/\b(ERROR|FATAL|SEVERE|CRITICAL)\b/g, '<span class="hl-err">$1</span>');
-  t = t.replace(/\b(WARN(?:ING)?)\b/g, '<span class="hl-warn">$1</span>');
+  t = t.replace(/\b([A-Za-z_$][\w$]*(?:Exception|Error|Throwable))\b/g, '<span class="hl-ex hl-click" role="button" tabindex="0" data-tk="ex" data-val="$1" title="Click for details">$1</span>');
+  t = t.replace(/\bnull\b/gi, '<span class="hl-null hl-click" role="button" tabindex="0" data-tk="null" data-val="null" title="Click for details">$&</span>');
+  t = t.replace(/\b(ERROR|FATAL|SEVERE|CRITICAL)\b/g, '<span class="hl-err hl-click" role="button" tabindex="0" data-tk="sev" data-val="$1" title="Click for details">$1</span>');
+  t = t.replace(/\b(WARN(?:ING)?)\b/g, '<span class="hl-warn hl-click" role="button" tabindex="0" data-tk="sev" data-val="$1" title="Click for details">$1</span>');
   if (query) {
     try {
       const rx = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
@@ -1258,6 +1346,32 @@ const UI = {
     pre.hidden = !pre.hidden;
     if (arr) arr.textContent = pre.hidden ? '▶' : '▼';
   },
+  openDetail(type, value) {
+    const d = tokenDetail(type, value);
+    const steps = d.steps?.length
+      ? `<div class="md-steps__title">🔧 What to check</div>
+         <ol class="md-steps">${d.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`
+      : '';
+    $('modal-content').innerHTML = `
+      <div class="md-head md-head--${d.accent}">
+        <span class="md-icon">${d.icon}</span>
+        <div>
+          <div class="md-kicker">${esc(d.kicker)}</div>
+          <h3 id="modal-title" class="md-title">${esc(d.title)}</h3>
+        </div>
+      </div>
+      <p class="md-desc">${esc(d.desc)}</p>
+      ${steps}
+      ${d.tip ? `<div class="md-tip">💡 ${esc(d.tip)}</div>` : ''}`;
+    const m = $('detail-modal');
+    m.hidden = false;
+    document.body.classList.add('modal-open');
+    el('.modal__close', m)?.focus();
+  },
+  closeDetail() {
+    $('detail-modal').hidden = true;
+    document.body.classList.remove('modal-open');
+  },
 };
 
 /** Boot the dashboard: load stored logs, analyze, render, wire events. */
@@ -1291,6 +1405,21 @@ async function boot() {
   $('log-search').addEventListener('input', (e) => { APP.search = e.target.value.trim(); renderLogs(); });
   $('seg-flagged').addEventListener('click', () => setSeg(false));
   $('seg-all').addEventListener('click', () => setSeg(true));
+
+  // Clickable highlighted tokens → detail modal (event delegation).
+  document.addEventListener('click', (e) => {
+    const tok = e.target.closest('.hl-click');
+    if (tok) { UI.openDetail(tok.dataset.tk, tok.dataset.val); return; }
+    if (e.target.closest('[data-close]')) UI.closeDetail();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { UI.closeDetail(); return; }
+    const act = document.activeElement;
+    if ((e.key === 'Enter' || e.key === ' ') && act?.classList.contains('hl-click')) {
+      e.preventDefault();
+      UI.openDetail(act.dataset.tk, act.dataset.val);
+    }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', boot);
