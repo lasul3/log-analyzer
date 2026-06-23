@@ -253,6 +253,26 @@ code { font-family: var(--mono); }
 .cell-mono  { font-family: var(--mono); font-size: 11px; color: var(--fg-2); }
 
 /* Grouped Config & Feature Flags (by source) */
+.cfg-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 14px 14px 0; }
+.cfg-field { display: flex; flex-direction: column; gap: 5px; }
+.cfg-field--grow { flex: 1; min-width: 200px; }
+.cfg-field__label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-2); }
+.cfg-select {
+  min-width: 220px; font-family: var(--mono); font-size: 12.5px;
+  color: var(--fg); background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 10px; cursor: pointer;
+}
+.cfg-select:hover { border-color: var(--blue); }
+.cfg-select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-bg); }
+.cfg-search { position: relative; display: flex; align-items: center; }
+.cfg-search__icon { position: absolute; left: 10px; color: var(--fg-3); pointer-events: none; }
+.cfg-search__input {
+  width: 100%; font-size: 12.5px; color: var(--fg); background: var(--bg-2);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px 8px 30px;
+}
+.cfg-search__input::placeholder { color: var(--fg-3); }
+.cfg-search__input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-bg); }
+.cfg-empty { padding: 28px 16px; text-align: center; color: var(--fg-2); font-size: 13px; }
 .cfg-groups { display: flex; flex-direction: column; gap: 14px; padding: 14px; }
 .cfg-group { border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
 .cfg-group__head {

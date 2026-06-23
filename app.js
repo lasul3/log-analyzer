@@ -941,10 +941,59 @@ function renderConfig() {
   // Largest groups first, then alphabetical.
   const ordered = [...groups.entries()]
     .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  APP.configGroups = new Map(ordered);
 
-  const sections = ordered.map(([src, items]) => {
+  const opts = [`<option value="__all">All sources (${cfgs.length})</option>`]
+    .concat(ordered.map(([src, items]) => {
+      const short = src.includes('.') ? src.split('.').pop() : src;
+      return `<option value="${esc(src)}">${esc(short)} (${items.length})</option>`;
+    })).join('');
+
+  $('config-block').innerHTML = `
+    <div class="card">
+      <div class="card__title">⚙️ Config &amp; Feature Flags · ${plural(cfgs.length, 'setting')} across ${plural(groups.size, 'source')}</div>
+      <div class="cfg-controls">
+        <div class="cfg-field">
+          <label for="cfg-source" class="cfg-field__label">Source</label>
+          <select id="cfg-source" class="cfg-select">${opts}</select>
+        </div>
+        <div class="cfg-field cfg-field--grow">
+          <label for="cfg-search" class="cfg-field__label">Filter</label>
+          <div class="cfg-search">
+            <svg class="cfg-search__icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input id="cfg-search" type="text" class="cfg-search__input" placeholder="Filter by parameter or value…" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+      </div>
+      <div id="cfg-table"></div>
+    </div>`;
+
+  const refresh = () => renderConfigTable($('cfg-source').value, $('cfg-search').value.trim());
+  $('cfg-source').addEventListener('change', refresh);
+  $('cfg-search').addEventListener('input', refresh);
+  renderConfigTable('__all', '');
+}
+
+/** Render the Config table for one source (or all), filtered by a query. */
+function renderConfigTable(source, query = '') {
+  const groups = APP.configGroups;
+  if (!groups || !groups.size) { $('cfg-table').innerHTML = ''; return; }
+
+  const q = query.toLowerCase();
+  const match = (c) => !q || c.key.toLowerCase().includes(q) || String(c.value).toLowerCase().includes(q);
+  const pick = source === '__all'
+    ? [...groups.entries()]
+    : [[source, groups.get(source) || []]];
+
+  let total = 0;
+  const sections = pick.map(([src, items]) => {
+    const filtered = items.filter(match);
+    if (!filtered.length) return '';
+    total += filtered.length;
     const short = src.includes('.') ? src.split('.').pop() : src;
-    const rows = items.map(c => `
+    const rows = filtered.map(c => `
       <tr title="${esc(c.context)}">
         <td class="cell-key">${esc(c.key)}</td>
         <td class="cell-val">${esc(c.value)}</td>
@@ -954,20 +1003,18 @@ function renderConfig() {
       <div class="cfg-group">
         <div class="cfg-group__head">
           <span class="cfg-group__src" title="${esc(src)}">📦 ${esc(short)}</span>
-          <span class="cfg-group__count">${plural(items.length, 'setting')}</span>
+          <span class="cfg-group__count">${plural(filtered.length, 'setting')}</span>
         </div>
         <table class="tbl cfg-tbl">
           <thead><tr><th>Parameter</th><th>Value</th><th>Line</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
-  }).join('');
+  }).filter(Boolean).join('');
 
-  $('config-block').innerHTML = `
-    <div class="card">
-      <div class="card__title">⚙️ Config &amp; Feature Flags · ${plural(cfgs.length, 'setting')} across ${plural(groups.size, 'source')}</div>
-      <div class="cfg-groups">${sections}</div>
-    </div>`;
+  $('cfg-table').innerHTML = sections
+    ? `<div class="cfg-groups">${sections}</div>`
+    : `<div class="cfg-empty">No settings match “${esc(query)}”.</div>`;
 }
 
 function renderTimeline() {
@@ -1261,7 +1308,7 @@ ${APP.anomalies.length ? `<h2 style="color:#d29922">Anomalies</h2><ul>${APP.anom
 const APP = {
   entries: [], issues: [], stats: {}, severity: {}, timeline: null,
   entities: {}, traceGroups: new Map(), timing: { deltas: [], slowCount: 0 },
-  configs: [], anomalies: [], nextSteps: [],
+  configs: [], anomalies: [], nextSteps: [], configGroups: new Map(),
   filename: '', format: '', showAll: false, search: '', chart: null,
 };
 
