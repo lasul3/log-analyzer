@@ -663,7 +663,7 @@ function extractConfigs(entries) {
         const k = `${key}=${val}`;
         if (!seen.has(k) && key.length <= 50 && val.length <= 120 && val !== '') {
           seen.add(k);
-          out.push({ key, value: val, line: e.lineNumber, context: msg.slice(0, 110) });
+          out.push({ key, value: val, line: e.lineNumber, logger: e.logger || null, level: e.level || null, context: msg.slice(0, 110) });
         }
       }
     }
@@ -930,17 +930,43 @@ function renderSeverity() {
 function renderConfig() {
   const cfgs = APP.configs;
   if (!cfgs.length) { $('config-block').innerHTML = ''; return; }
+
+  // Group settings by their source (the logger/component that emitted the line).
+  const groups = new Map();
+  for (const c of cfgs) {
+    const src = c.logger || 'Unattributed (plain log)';
+    if (!groups.has(src)) groups.set(src, []);
+    groups.get(src).push(c);
+  }
+  // Largest groups first, then alphabetical.
+  const ordered = [...groups.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+
+  const sections = ordered.map(([src, items]) => {
+    const short = src.includes('.') ? src.split('.').pop() : src;
+    const rows = items.map(c => `
+      <tr title="${esc(c.context)}">
+        <td class="cell-key">${esc(c.key)}</td>
+        <td class="cell-val">${esc(c.value)}</td>
+        <td class="cfg-line">L${c.line}</td>
+      </tr>`).join('');
+    return `
+      <div class="cfg-group">
+        <div class="cfg-group__head">
+          <span class="cfg-group__src" title="${esc(src)}">📦 ${esc(short)}</span>
+          <span class="cfg-group__count">${plural(items.length, 'setting')}</span>
+        </div>
+        <table class="tbl cfg-tbl">
+          <thead><tr><th>Parameter</th><th>Value</th><th>Line</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+
   $('config-block').innerHTML = `
     <div class="card">
-      <div class="card__title">⚙️ Config &amp; Feature Flags (${cfgs.length})</div>
-      <table class="tbl">
-        <thead><tr><th>Parameter</th><th>Value</th><th>Source</th></tr></thead>
-        <tbody>${cfgs.map(c => `
-          <tr><td class="cell-key">${esc(c.key)}</td>
-              <td class="cell-val">${esc(c.value)}</td>
-              <td class="cell-ctx" title="${esc(c.context)}">${esc(c.context)}</td></tr>`).join('')}
-        </tbody>
-      </table>
+      <div class="card__title">⚙️ Config &amp; Feature Flags · ${plural(cfgs.length, 'setting')} across ${plural(groups.size, 'source')}</div>
+      <div class="cfg-groups">${sections}</div>
     </div>`;
 }
 
