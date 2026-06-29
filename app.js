@@ -44,6 +44,7 @@ function fmtMs(ms) {
   return `${Math.round(ms / 86_400_000)}d`;
 }
 function plural(n, w) { return `${n} ${w}${n === 1 ? '' : 's'}`; }
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'; }
 function pushMap(map, key, val) { (map.get(key) ?? map.set(key, []).get(key)).push(val); }
 
 
@@ -1021,7 +1022,10 @@ function renderTimeline() {
   const t = APP.timeline;
   const empty = $('timeline-empty'), canvas = $('timeline-chart');
   if (!t || !t.labels.length) { empty.hidden = false; canvas.style.display = 'none'; }
-  else {
+  else if (typeof Chart === 'undefined') {
+    empty.textContent = 'Charting library unavailable (offline) — timeline disabled.';
+    empty.hidden = false; canvas.style.display = 'none';
+  } else {
     empty.hidden = true; canvas.style.display = '';
     APP.chart?.destroy();
     APP.chart = new Chart(canvas.getContext('2d'), {
@@ -1033,10 +1037,10 @@ function renderTimeline() {
       ]},
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: '#e6edf3' } },
-          tooltip: { backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1, titleColor: '#e6edf3', bodyColor: '#8b949e' } },
-        scales: { x: { ticks: { color: '#8b949e', maxRotation: 45 }, grid: { color: '#21262d' }, stacked: true },
-                  y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' }, beginAtZero: true, stacked: true } },
+        plugins: { legend: { labels: { color: cssVar('--fg') } },
+          tooltip: { backgroundColor: cssVar('--bg-1'), borderColor: cssVar('--border'), borderWidth: 1, titleColor: cssVar('--fg'), bodyColor: cssVar('--fg-2') } },
+        scales: { x: { ticks: { color: cssVar('--fg-2'), maxRotation: 45 }, grid: { color: cssVar('--border-soft') }, stacked: true },
+                  y: { ticks: { color: cssVar('--fg-2') }, grid: { color: cssVar('--border-soft') }, beginAtZero: true, stacked: true } },
       },
     });
   }
@@ -1190,29 +1194,62 @@ function renderNextSteps() {
     </div>`;
 }
 
-function renderLogs() {
-  const container = $('log-viewer');
+const LOG_ROW_H = 26;        // fixed virtual row height (px), must match CSS
+const LOG_OVERSCAN = 12;     // extra rows above/below viewport
+
+/* Filter the current entry set by Flagged/All, severity chips, and search. */
+function filterLogs() {
   let list = APP.showAll ? APP.entries : APP.entries.filter(e => e.flags.length);
+  if (APP.levels) list = list.filter(e => APP.levels.has(e.level));
   if (APP.search) {
     const q = APP.search.toLowerCase();
     list = list.filter(e => (e.raw || '').toLowerCase().includes(q) || (e.message || '').toLowerCase().includes(q));
   }
-  if (!list.length) { container.innerHTML = '<div class="empty">No entries match the current filter.</div>'; return; }
+  return list;
+}
 
-  const MAX = 2000;
-  const rows = list.slice(0, MAX).map(e => {
+/* Build one row's HTML; static parts are cached, search mark applied on top. */
+function logRowHTML(e) {
+  if (e._rowHTML == null) {
     const has = (f) => e.flags.includes(f);
     const cls = has('EXCEPTION') ? 'log-row--exception' : has('ERROR') ? 'log-row--error' : has('NULL_RESPONSE') ? 'log-row--null' : '';
     const lvl = e.level ? `<span class="lvl lvl--${e.level.toLowerCase()}">${e.level}</span>` : '';
     const flags = e.flags.map(f => `<span class="flag flag--${f.toLowerCase()}">${f === 'NULL_RESPONSE' ? 'NULL' : f}</span>`).join('');
     const time = e.timestamp ? `<span class="log-time">${fmtClock(e.timestamp)}</span>` : '';
-    return `<div class="log-row ${cls}"><span class="log-num">${e.lineNumber}</span>${time}${lvl}${flags}<span class="log-msg">${highlight(e.message || e.raw, APP.search)}</span></div>`;
-  }).join('');
+    e._cls = cls;
+    e._head = `${time}${lvl}${flags}`;
+    e._rowHTML = highlight(e.message || e.raw, '');
+  }
+  const msg = APP.search ? highlight(e.message || e.raw, APP.search) : e._rowHTML;
+  return `<div class="log-row ${e._cls}" style="height:${LOG_ROW_H}px" title="${esc(e.message || e.raw)}"><span class="log-num">${e.lineNumber}</span>${e._head}<span class="log-msg">${msg}</span></div>`;
+}
 
-  container.innerHTML = `
-    <div class="log-count">${list.length.toLocaleString()} ${list.length === 1 ? 'entry' : 'entries'}${APP.showAll ? '' : ' (flagged only)'}</div>
-    ${rows}
-    ${list.length > MAX ? `<div class="log-trunc">Showing first ${MAX.toLocaleString()} of ${list.length.toLocaleString()}</div>` : ''}`;
+/* Paint only the rows visible in the scroll viewport (virtualization). */
+function paintLogs() {
+  const vp = $('log-vp'), spacer = $('log-spacer'), inner = $('log-rows');
+  if (!vp || !spacer || !inner) return;
+  const list = APP.logList;
+  const total = list.length * LOG_ROW_H;
+  spacer.style.height = `${total}px`;
+  const top = vp.scrollTop, h = vp.clientHeight;
+  const start = Math.max(0, Math.floor(top / LOG_ROW_H) - LOG_OVERSCAN);
+  const end = Math.min(list.length, Math.ceil((top + h) / LOG_ROW_H) + LOG_OVERSCAN);
+  inner.style.transform = `translateY(${start * LOG_ROW_H}px)`;
+  inner.innerHTML = list.slice(start, end).map(logRowHTML).join('');
+}
+
+function renderLogs() {
+  const container = $('log-viewer');
+  const list = APP.logList = filterLogs();
+  const cnt = $('log-count');
+  if (cnt) cnt.textContent = `${list.length.toLocaleString()} ${list.length === 1 ? 'entry' : 'entries'}${APP.showAll ? '' : ' flagged'}${APP.search ? ' · matches' : ''}`;
+  if (!list.length) {
+    container.innerHTML = '<div class="empty">No entries match the current filter.</div>';
+    return;
+  }
+  container.innerHTML = `<div id="log-vp" class="log-vp"><div id="log-spacer" class="log-spacer"></div><div id="log-rows" class="log-rows"></div></div>`;
+  $('log-vp').addEventListener('scroll', paintLogs, { passive: true });
+  paintLogs();
 }
 
 
@@ -1310,6 +1347,7 @@ const APP = {
   entities: {}, traceGroups: new Map(), timing: { deltas: [], slowCount: 0 },
   configs: [], anomalies: [], nextSteps: [], configGroups: new Map(),
   filename: '', format: '', showAll: false, search: '', chart: null,
+  levels: null, logList: [], timelineReady: false,
 };
 
 const STORE_CONTENT = 'la.content';
@@ -1352,6 +1390,8 @@ function runAnalysis(content, filename) {
   APP.filename = filename || 'analysis.log';
   APP.showAll  = false;
   APP.search   = '';
+  APP.levels   = null;
+  APP.timelineReady = false;
 
   APP.stats       = computeStats(entries);
   APP.severity    = computeSeverity(entries);
@@ -1379,7 +1419,6 @@ function renderAll() {
 
   renderCards(APP.stats);
   renderOverview();
-  renderTimeline();
   renderTrace();
   renderDebug();
   renderLogs();
@@ -1393,7 +1432,11 @@ function switchTab(name) {
     p.classList.toggle('is-active', on);
     p.hidden = !on;
   });
-  if (name === 'timeline') APP.chart?.resize();
+  if (name === 'timeline') {
+    if (!APP.timelineReady) { APP.timelineReady = true; renderTimeline(); }
+    else APP.chart?.resize();
+  }
+  if (name === 'logs') paintLogs();
 }
 
 /** Toggle the Flagged / All segment in the Log Viewer. */
@@ -1420,6 +1463,7 @@ const UI = {
     if (arr) arr.textContent = pre.hidden ? '▶' : '▼';
   },
   openDetail(type, value) {
+    UI._lastFocus = document.activeElement;
     const d = tokenDetail(type, value);
     const steps = d.steps?.length
       ? `<div class="md-steps__title">🔧 What to check</div>
@@ -1444,11 +1488,21 @@ const UI = {
   closeDetail() {
     $('detail-modal').hidden = true;
     document.body.classList.remove('modal-open');
+    UI._lastFocus?.focus?.();
   },
 };
 
+/* Apply and persist the colour theme; update the toggle icon. */
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('la.theme', theme); } catch { /* ignore */ }
+  const b = $('btn-theme');
+  if (b) b.textContent = theme === 'light' ? '☀️' : '🌙';
+}
+
 /** Boot the dashboard: load stored logs, analyze, render, wire events. */
 async function boot() {
+  try { setTheme(localStorage.getItem('la.theme') || 'dark'); } catch { setTheme('dark'); }
   const payload = await loadPayload();
   if (!payload) { location.replace('index.html'); return; }
 
@@ -1475,9 +1529,32 @@ async function boot() {
     location.href = 'index.html';
   });
 
-  $('log-search').addEventListener('input', (e) => { APP.search = e.target.value.trim(); renderLogs(); });
+  $('log-search').addEventListener('input', (e) => {
+    APP.search = e.target.value.trim();
+    $('log-search-clear').hidden = !APP.search;
+    renderLogs();
+  });
+  $('log-search-clear').addEventListener('click', () => {
+    $('log-search').value = ''; APP.search = '';
+    $('log-search-clear').hidden = true; renderLogs(); $('log-search').focus();
+  });
   $('seg-flagged').addEventListener('click', () => setSeg(false));
   $('seg-all').addEventListener('click', () => setSeg(true));
+
+  const LVL_MAP = { ERROR: ['ERROR', 'FATAL', 'SEVERE', 'CRITICAL'], WARN: ['WARN'], INFO: ['INFO', 'DEBUG', 'TRACE', 'UNKNOWN', null] };
+  els('.chip').forEach(chip => chip.addEventListener('click', () => {
+    chip.classList.toggle('is-active');
+    const active = els('.chip').filter(c => c.classList.contains('is-active'));
+    APP.levels = active.length === 3 ? null
+      : new Set(active.flatMap(c => LVL_MAP[c.dataset.lvl]));
+    renderLogs();
+  }));
+
+  $('btn-theme').addEventListener('click', () => {
+    const light = document.documentElement.dataset.theme === 'light';
+    setTheme(light ? 'dark' : 'light');
+    APP.chart && (APP.timelineReady = true, renderTimeline());
+  });
 
   // Clickable highlighted tokens → detail modal (event delegation).
   document.addEventListener('click', (e) => {
@@ -1487,6 +1564,15 @@ async function boot() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { UI.closeDetail(); return; }
+    const modal = $('detail-modal');
+    if (!modal.hidden && e.key === 'Tab') {
+      const f = els('button, [href], [tabindex]:not([tabindex="-1"])', modal);
+      if (f.length) {
+        const first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
     const act = document.activeElement;
     if ((e.key === 'Enter' || e.key === ' ') && act?.classList.contains('hl-click')) {
       e.preventDefault();

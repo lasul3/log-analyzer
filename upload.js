@@ -54,7 +54,9 @@ function readFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
     const text = String(reader.result || '');
-    $('paste-input').value = text.length > 20000 ? text.slice(0, 20000) + '\n…(preview truncated)…' : text;
+    const truncated = text.length > 20000;
+    $('paste-input').value = truncated ? text.slice(0, 20000) + '\n…(preview truncated)…' : text;
+    const note = $('paste-note'); if (note) note.hidden = !truncated;
     setPayload(text, file.name || 'uploaded.log');
   };
   reader.readAsText(file);
@@ -90,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('file-input').addEventListener('change', (e) => readFile(e.target.files[0]));
 
-  $('paste-input').addEventListener('input', (e) => setPayload(e.target.value, 'pasted.log'));
+  $('paste-input').addEventListener('input', (e) => { $('paste-note').hidden = true; setPayload(e.target.value, 'pasted.log'); });
 
   $('sample-btn').addEventListener('click', () => {
     $('paste-input').value = SAMPLE_LOG;
